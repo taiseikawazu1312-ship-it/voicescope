@@ -63,6 +63,8 @@ export interface UseDeepgramReturn {
   disconnect: () => void;
   /** 音声チャンクを送信する */
   sendAudio: (chunk: Blob) => void;
+  /** transcript状態をリセットする（ターン切り替え時に使用） */
+  reset: () => void;
 }
 
 /** Deepgram接続パラメータ */
@@ -73,8 +75,6 @@ const DEEPGRAM_PARAMS = new URLSearchParams({
   punctuate: "true",
   interim_results: "true",
   endpointing: "300",
-  encoding: "linear16",
-  sample_rate: "16000",
 });
 
 export function useDeepgram(): UseDeepgramReturn {
@@ -114,12 +114,29 @@ export function useDeepgram(): UseDeepgramReturn {
   }, []);
 
   /**
+   * transcript状態をリセットする。ターン間で前回の文字起こしが混在しないようにする。
+   */
+  const reset = useCallback(() => {
+    fullTranscriptRef.current = "";
+    setFullTranscript("");
+    setTranscript("");
+    setError(null);
+  }, []);
+
+  /**
    * DeepgramにWebSocket接続する。
    */
   const connect = useCallback(async () => {
-    // 既に接続中の場合は何もしない
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      return;
+    // 既に接続中またはクローズ中の場合は処理する
+    if (wsRef.current) {
+      if (wsRef.current.readyState === WebSocket.OPEN) {
+        return;
+      }
+      // CONNECTING or CLOSING状態の場合はクリーンアップ
+      if (wsRef.current.readyState !== WebSocket.CLOSED) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
     }
 
     setError(null);
@@ -246,5 +263,6 @@ export function useDeepgram(): UseDeepgramReturn {
     connect,
     disconnect,
     sendAudio,
+    reset,
   };
 }

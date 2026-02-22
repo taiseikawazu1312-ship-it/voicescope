@@ -38,6 +38,7 @@ export interface InterviewState {
 export interface UseInterviewEngineReturn {
   state: InterviewState;
   startInterview: () => Promise<void>;
+  stopListening: () => void;
   endInterview: () => Promise<void>;
 }
 
@@ -47,9 +48,6 @@ export interface UseInterviewEngineReturn {
 
 /** インタビューの最大時間（ミリ秒）: 5分 */
 const MAX_INTERVIEW_DURATION_MS = 5 * 60 * 1000;
-
-/** 沈黙検出閾値（ミリ秒）: 2秒間文字起こしが更新されなければ発話終了とみなす */
-const SILENCE_THRESHOLD_MS = 2000;
 
 // ────────────────────────────────────────────
 // フック実装
@@ -72,15 +70,24 @@ export function useInterviewEngine(
   const playerRef = useRef<AudioPlayer | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startTimeRef = useRef<number>(0);
-  const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isEndingRef = useRef(false);
   const lastTranscriptRef = useRef("");
   const phaseRef = useRef<InterviewPhase>("idle");
+  const turnCountRef = useRef(0);
+  const messagesRef = useRef<InterviewMessage[]>([]);
 
-  // phaseRefを同期
+  // Refを同期
   useEffect(() => {
     phaseRef.current = phase;
   }, [phase]);
+
+  useEffect(() => {
+    turnCountRef.current = turnCount;
+  }, [turnCount]);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   // ----- サブフック -----
   const recorder = useAudioRecorder();
@@ -161,7 +168,7 @@ export function useInterviewEngine(
           body: JSON.stringify({
             sessionId,
             message: userMessage,
-            turnCount,
+            turnCount: turnCountRef.current,
             elapsedSeconds: Math.floor(
               (Date.now() - startTimeRef.current) / 1000
             ),
@@ -195,7 +202,7 @@ export function useInterviewEngine(
           return;
         }
 
-        // ユーザーの発話待ちに移行（録音を再開）
+        // ユーザーの発話待ちに移行（録音を自動再開）
         await startListening();
       } catch (err) {
         const message =
@@ -206,25 +213,8 @@ export function useInterviewEngine(
         setPhase("error");
       }
     },
-    [sessionId, turnCount, speakText]
+    [sessionId, speakText]
   );
-
-  // ────────────────────────────────────────
-  // 沈黙検出: ユーザーが話し終えたかを判定する
-  // ────────────────────────────────────────
-
-  const resetSilenceTimer = useCallback(() => {
-    if (silenceTimerRef.current) {
-      clearTimeout(silenceTimerRef.current);
-    }
-
-    silenceTimerRef.current = setTimeout(() => {
-      // 沈黙が閾値を超えた場合、ユーザーの発話が終了したとみなす
-      if (phaseRef.current === "interviewing" && recorder.isRecording) {
-        handleUserFinishedSpeaking();
-      }
-    }, SILENCE_THRESHOLD_MS);
-  }, [recorder.isRecording]);
 
   // ────────────────────────────────────────
   // ユーザーが話し終わった時の処理
@@ -269,6 +259,10 @@ export function useInterviewEngine(
   const startListening = useCallback(async () => {
     if (phaseRef.current !== "interviewing") return;
 
+    // 前回の文字起こし状態をリセット
+    deepgram.reset();
+    lastTranscriptRef.current = "";
+
     setIsUserSpeaking(true);
     setCurrentTranscript("");
 
@@ -282,14 +276,20 @@ export function useInterviewEngine(
       });
 
       await recorder.startRecording();
-
-      // 沈黙タイマーを開始
-      resetSilenceTimer();
     } catch (err) {
       console.warn("リスニング開始エラー:", err);
       setIsUserSpeaking(false);
     }
-  }, [deepgram, recorder, resetSilenceTimer]);
+  }, [deepgram, recorder]);
+
+  // ────────────────────────────────────────
+  // リスニング停止（マイクボタンから呼び出し）
+  // ────────────────────────────────────────
+
+  const stopListening = useCallback(() => {
+    if (!isUserSpeaking || phaseRef.current !== "interviewing") return;
+    handleUserFinishedSpeaking();
+  }, [isUserSpeaking, handleUserFinishedSpeaking]);
 
   // ────────────────────────────────────────
   // DeepgramのtranscriptをcurrentTranscriptに同期
@@ -299,12 +299,10 @@ export function useInterviewEngine(
     const combined = deepgram.fullTranscript + deepgram.transcript;
     setCurrentTranscript(combined);
 
-    // 文字起こし結果が更新されたら沈黙タイマーをリセット
-    if (combined !== lastTranscriptRef.current && combined.trim()) {
+    if (combined.trim()) {
       lastTranscriptRef.current = combined;
-      resetSilenceTimer();
     }
-  }, [deepgram.transcript, deepgram.fullTranscript, resetSilenceTimer]);
+  }, [deepgram.transcript, deepgram.fullTranscript]);
 
   // Deepgramのエラーを伝搬
   useEffect(() => {
@@ -374,7 +372,7 @@ export function useInterviewEngine(
       // AIの最初の発話を再生
       await speakText(firstMessage);
 
-      // ユーザーのリスニングを開始
+      // ユーザーのリスニングを自動開始
       await startListening();
     } catch (err) {
       const message =
@@ -408,12 +406,6 @@ export function useInterviewEngine(
     // AudioPlayer停止
     playerRef.current?.stop();
 
-    // 沈黙タイマークリア
-    if (silenceTimerRef.current) {
-      clearTimeout(silenceTimerRef.current);
-      silenceTimerRef.current = null;
-    }
-
     setIsAISpeaking(false);
     setIsUserSpeaking(false);
 
@@ -423,7 +415,7 @@ export function useInterviewEngine(
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          messages: messages.map((m) => ({
+          messages: messagesRef.current.map((m) => ({
             role: m.role,
             content: m.content,
           })),
@@ -435,7 +427,7 @@ export function useInterviewEngine(
       // スコア計算は失敗してもインタビュー自体は完了とする
       setPhase("completed");
     }
-  }, [sessionId, messages, recorder, deepgram, stopTimer]);
+  }, [sessionId, recorder, deepgram, stopTimer]);
 
   /**
    * インタビュー終了（外部公開用）
@@ -453,11 +445,6 @@ export function useInterviewEngine(
       stopTimer();
       playerRef.current?.destroy();
       playerRef.current = null;
-
-      if (silenceTimerRef.current) {
-        clearTimeout(silenceTimerRef.current);
-        silenceTimerRef.current = null;
-      }
     };
   }, [stopTimer]);
 
@@ -479,6 +466,7 @@ export function useInterviewEngine(
   return {
     state,
     startInterview,
+    stopListening,
     endInterview,
   };
 }

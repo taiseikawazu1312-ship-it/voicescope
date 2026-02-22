@@ -166,7 +166,7 @@ export default function InterviewPage() {
 // インタビュールームコンポーネント（実際のAIインタビュー）
 // =================================================================
 function InterviewRoom({ tokenInfo }: { tokenInfo: TokenInfo }) {
-  const { state, startInterview, endInterview } = useInterviewEngine(
+  const { state, startInterview, stopListening, endInterview } = useInterviewEngine(
     tokenInfo.sessionId
   );
 
@@ -355,14 +355,15 @@ function InterviewRoom({ tokenInfo }: { tokenInfo: TokenInfo }) {
           <div className="flex flex-col items-center gap-4 pb-8 pt-4">
             {/* マイクボタン */}
             <button
-              disabled={state.isAISpeaking || state.phase === "processing"}
+              onClick={state.isUserSpeaking ? stopListening : undefined}
+              disabled={state.isAISpeaking || state.phase === "processing" || !state.isUserSpeaking}
               className={cn(
                 "flex h-16 w-16 items-center justify-center rounded-full transition-all",
                 "focus:outline-none focus:ring-2 focus:ring-white/30 focus:ring-offset-2 focus:ring-offset-transparent",
                 "disabled:opacity-50 disabled:cursor-not-allowed",
                 state.isUserSpeaking
-                  ? "bg-red-500 shadow-lg shadow-red-500/50 animate-mic-pulse"
-                  : "bg-white/20 hover:bg-white/30"
+                  ? "bg-red-500 shadow-lg shadow-red-500/50 animate-mic-pulse hover:bg-red-600 cursor-pointer"
+                  : "bg-white/20"
               )}
             >
               {state.isUserSpeaking ? (
@@ -373,11 +374,11 @@ function InterviewRoom({ tokenInfo }: { tokenInfo: TokenInfo }) {
             </button>
             <p className="text-xs text-white/40">
               {state.isUserSpeaking
-                ? "録音中..."
+                ? "話し終わったらマイクボタンを押してください"
                 : state.isAISpeaking
                   ? "AIが話しています..."
                   : state.phase === "processing"
-                    ? "処理中..."
+                    ? "AI応答を生成中..."
                     : "マイクに向かってお話しください"}
             </p>
           </div>
