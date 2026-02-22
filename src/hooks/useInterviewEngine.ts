@@ -161,10 +161,10 @@ export function useInterviewEngine(
           body: JSON.stringify({
             sessionId,
             message: userMessage,
-            messages: messages.map((m) => ({
-              role: m.role === "ai" ? "assistant" : "user",
-              content: m.content,
-            })),
+            turnCount,
+            elapsedSeconds: Math.floor(
+              (Date.now() - startTimeRef.current) / 1000
+            ),
           }),
         });
 
@@ -173,7 +173,7 @@ export function useInterviewEngine(
         }
 
         const data = await response.json();
-        const aiText: string = data.response;
+        const aiText: string = data.message;
         const shouldEnd: boolean = data.shouldEnd ?? false;
 
         // AIメッセージを追加
@@ -206,7 +206,7 @@ export function useInterviewEngine(
         setPhase("error");
       }
     },
-    [sessionId, messages, speakText]
+    [sessionId, turnCount, speakText]
   );
 
   // ────────────────────────────────────────
