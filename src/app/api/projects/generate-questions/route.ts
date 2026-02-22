@@ -20,7 +20,7 @@ export async function POST(request: NextRequest) {
     const anthropic = new Anthropic();
 
     const response = await anthropic.messages.create({
-      model: "claude-sonnet-4-6-20250514",
+      model: "claude-sonnet-4-20250514",
       max_tokens: 4096,
       system: `あなたはユーザーインタビューの質問設計の専門家です。
 与えられた調査テーマに基づき、5分間のAIインタビューに最適な質問セットを生成してください。
@@ -92,8 +92,9 @@ ${description ? `## 調査の説明・目的\n${description}` : ""}
     return NextResponse.json({ questions: validQuestions });
   } catch (error) {
     console.error("POST /api/projects/generate-questions error:", error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
     return NextResponse.json(
-      { error: "質問の自動生成に失敗しました" },
+      { error: "質問の自動生成に失敗しました", detail: errorMessage },
       { status: 500 }
     );
   }

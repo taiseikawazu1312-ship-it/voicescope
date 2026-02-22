@@ -170,7 +170,7 @@ ${historyText}
 
   try {
     const response = await client.messages.create({
-      model: "claude-sonnet-4-6-20250514",
+      model: "claude-sonnet-4-20250514",
       max_tokens: 1024,
       system: QUALITY_SCORING_PROMPT,
       messages: [
