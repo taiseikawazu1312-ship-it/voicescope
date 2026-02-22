@@ -6,7 +6,11 @@ import Link from "next/link";
 import {
   ArrowLeft,
   BarChart3,
+  Check,
+  Copy,
+  ExternalLink,
   Lightbulb,
+  Link2,
   Mic,
   Play,
   TrendingUp,
@@ -65,6 +69,10 @@ export default function ProjectDetailPage() {
   const [respondentName, setRespondentName] = useState("");
   const [isCreating, setIsCreating] = useState(false);
 
+  // インタビューリンク共有
+  const [shareToken, setShareToken] = useState<string | null>(null);
+  const [linkCopied, setLinkCopied] = useState(false);
+
   const fetchProject = useCallback(async () => {
     try {
       const res = await fetch(`/api/projects/${projectId}`);
@@ -111,6 +119,43 @@ export default function ProjectDetailPage() {
       );
       setIsCreating(false);
     }
+  };
+
+  const handleCreateShareLink = async () => {
+    setIsCreating(true);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/sessions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: respondentName.trim() || undefined }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "リンクの作成に失敗しました");
+      }
+
+      const data: CreateSessionResponse = await res.json();
+      setShareToken(data.token);
+      setRespondentName("");
+      fetchProject();
+    } catch (err) {
+      alert(
+        err instanceof Error ? err.message : "リンクの作成に失敗しました"
+      );
+    } finally {
+      setIsCreating(false);
+    }
+  };
+
+  const interviewUrl = shareToken
+    ? `${window.location.origin}/interview/${shareToken}`
+    : "";
+
+  const handleCopyLink = () => {
+    navigator.clipboard.writeText(interviewUrl);
+    setLinkCopied(true);
+    setTimeout(() => setLinkCopied(false), 2000);
   };
 
   if (loading) {
@@ -302,6 +347,105 @@ export default function ProjectDetailPage() {
             </CardContent>
           </Card>
         </div>
+
+        {/* インタビューリンク共有 */}
+        <Card className="mb-8">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Link2 className="h-5 w-5 text-purple-600" />
+              インタビューリンク
+            </CardTitle>
+            <CardDescription>
+              回答者にこのリンクを共有すると、別のURLでAIインタビューを受けることができます
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {shareToken ? (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <div className="flex-1 rounded-lg border bg-muted/50 px-3 py-2">
+                    <p className="truncate text-sm font-mono text-muted-foreground">
+                      {interviewUrl}
+                    </p>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleCopyLink}
+                    className="shrink-0"
+                  >
+                    {linkCopied ? (
+                      <>
+                        <Check className="h-4 w-4 text-green-600" />
+                        コピー済み
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="h-4 w-4" />
+                        コピー
+                      </>
+                    )}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => window.open(interviewUrl, "_blank")}
+                    className="shrink-0"
+                  >
+                    <ExternalLink className="h-4 w-4" />
+                    開く
+                  </Button>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setShareToken(null);
+                    setLinkCopied(false);
+                  }}
+                  className="text-xs text-muted-foreground"
+                >
+                  新しいリンクを作成
+                </Button>
+              </div>
+            ) : (
+              <div className="flex items-end gap-3">
+                <div className="flex-1 space-y-2">
+                  <Label htmlFor="shareName" className="text-xs">
+                    回答者名（任意）
+                  </Label>
+                  <Input
+                    id="shareName"
+                    placeholder="例: 田中太郎"
+                    value={respondentName}
+                    onChange={(e) => setRespondentName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleCreateShareLink();
+                    }}
+                    className="h-9"
+                  />
+                </div>
+                <Button
+                  onClick={handleCreateShareLink}
+                  disabled={isCreating}
+                  className="h-9 bg-gradient-to-r from-[#1A1A2E] to-[#4A3AFF] text-white"
+                >
+                  {isCreating ? (
+                    <>
+                      <span className="h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                      作成中...
+                    </>
+                  ) : (
+                    <>
+                      <Link2 className="h-4 w-4" />
+                      リンクを生成
+                    </>
+                  )}
+                </Button>
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
         {/* セッション一覧 */}
         <div className="mb-4 flex items-center justify-between">

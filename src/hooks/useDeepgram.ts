@@ -103,9 +103,7 @@ export function useDeepgram(): UseDeepgramReturn {
    * サーバーから一時トークンを取得する。
    */
   const fetchToken = useCallback(async (): Promise<string> => {
-    const response = await fetch("/api/stt/token", {
-      method: "POST",
-    });
+    const response = await fetch("/api/stt/token");
 
     if (!response.ok) {
       throw new Error("STTトークンの取得に失敗しました");

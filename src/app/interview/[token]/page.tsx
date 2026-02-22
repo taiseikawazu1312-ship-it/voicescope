@@ -1,210 +1,187 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
-import { useParams, useRouter } from "next/navigation";
-import { Mic, MicOff, MessageSquare, X, Play } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
+import { useParams } from "next/navigation";
+import { Mic, MicOff, MessageSquare, X, Play, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { AIAvatar } from "@/components/interview/AIAvatar";
 import { TranscriptPanel } from "@/components/interview/TranscriptPanel";
 import { Timer } from "@/components/interview/Timer";
+import {
+  useInterviewEngine,
+  type InterviewMessage as EngineMessage,
+} from "@/hooks/useInterviewEngine";
+import type { InterviewMessage } from "@/types";
 
 // =================================================================
-// 型定義（useInterviewEngineフックと共通）
+// トークン解決レスポンスの型
 // =================================================================
-interface InterviewMessage {
-  role: "ai" | "respondent";
-  content: string;
-  timestamp: number;
-  audioUrl?: string;
+interface TokenInfo {
+  sessionId: string;
+  token: string;
+  status: string;
+  project: {
+    id: string;
+    title: string;
+    description: string | null;
+  };
+  respondent: {
+    id: string;
+    name: string | null;
+  };
 }
 
-type InterviewPhase =
-  | "idle"
-  | "connecting"
-  | "interviewing"
-  | "processing"
-  | "completed"
-  | "error";
+type PageStatus = "loading" | "ready" | "completed" | "expired" | "error";
 
-interface InterviewState {
-  phase: InterviewPhase;
-  messages: InterviewMessage[];
-  currentTranscript: string;
-  elapsedTime: number; // ミリ秒
-  turnCount: number;
-  isAISpeaking: boolean;
-  isUserSpeaking: boolean;
-  error: string | null;
-}
-
-interface UseInterviewEngineReturn {
-  state: InterviewState;
-  startInterview: () => Promise<void>;
-  endInterview: () => Promise<void>;
-}
-
-// TranscriptPanelが期待する形式に変換
-interface TranscriptMessage {
-  id: string;
-  speaker: "ai" | "user";
-  text: string;
-  timestamp: number;
-}
-
-function toTranscriptMessages(messages: InterviewMessage[]): TranscriptMessage[] {
+// =================================================================
+// EngineMessage → TranscriptPanel用のInterviewMessage変換
+// =================================================================
+function toTranscriptMessages(messages: EngineMessage[]): InterviewMessage[] {
   return messages.map((m, i) => ({
     id: `msg-${i}-${m.timestamp}`,
-    speaker: m.role === "ai" ? "ai" : "user",
+    speaker: m.role === "ai" ? ("ai" as const) : ("user" as const),
     text: m.content,
-    timestamp: m.timestamp,
+    timestamp: m.timestamp / 1000, // ms → sec
   }));
 }
 
 // =================================================================
-// モック版 useInterviewEngine（実際のフックが利用不可な場合のフォールバック）
-// =================================================================
-function useInterviewEngineMock(
-  _sessionId: string
-): UseInterviewEngineReturn {
-  const [state, setState] = useState<InterviewState>({
-    phase: "idle",
-    messages: [],
-    currentTranscript: "",
-    elapsedTime: 0,
-    turnCount: 0,
-    isAISpeaking: false,
-    isUserSpeaking: false,
-    error: null,
-  });
-
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const phaseRef = useRef<InterviewPhase>("idle");
-
-  useEffect(() => {
-    phaseRef.current = state.phase;
-  }, [state.phase]);
-
-  const addMessage = useCallback(
-    (role: "ai" | "respondent", content: string) => {
-      setState((prev) => ({
-        ...prev,
-        messages: [
-          ...prev.messages,
-          { role, content, timestamp: Date.now() },
-        ],
-        turnCount: prev.turnCount + (role === "respondent" ? 1 : 0),
-      }));
-    },
-    []
-  );
-
-  const simulateAISpeaking = useCallback(
-    (text: string) => {
-      setState((prev) => ({ ...prev, isAISpeaking: true }));
-      setTimeout(() => {
-        addMessage("ai", text);
-        setState((prev) => ({ ...prev, isAISpeaking: false }));
-      }, 1500);
-    },
-    [addMessage]
-  );
-
-  const startInterview = useCallback(async () => {
-    setState((prev) => ({ ...prev, phase: "connecting" }));
-
-    timerRef.current = setInterval(() => {
-      setState((prev) => {
-        const newElapsed = prev.elapsedTime + 1000;
-        if (newElapsed >= 300000 && phaseRef.current === "interviewing") {
-          return { ...prev, elapsedTime: newElapsed, phase: "completed" };
-        }
-        return { ...prev, elapsedTime: newElapsed };
-      });
-    }, 1000);
-
-    await new Promise((r) => setTimeout(r, 1000));
-    setState((prev) => ({ ...prev, phase: "interviewing" }));
-    simulateAISpeaking(
-      "こんにちは。本日はインタビューにご参加いただきありがとうございます。リラックスしてお話しいただければと思います。それでは早速ですが、最初の質問です。"
-    );
-  }, [simulateAISpeaking]);
-
-  const endInterview = useCallback(async () => {
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
-    setState((prev) => ({ ...prev, phase: "completed" }));
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
-  }, []);
-
-  return { state, startInterview, endInterview };
-}
-
-// =================================================================
-// フック選択（実際のフックを動的にインポート試行）
-// =================================================================
-function useInterviewEngineWithFallback(
-  sessionId: string
-): UseInterviewEngineReturn {
-  // 実際のuseInterviewEngineが利用可能か試行
-  // 注: 動的インポートはReact Hooksのルール制約でフック内では使えないため、
-  // ここでは直接インポートを試み、失敗時はモックにフォールバックする。
-  // useInterviewEngine の依存(Deepgram, AudioRecorder等)が未設定の場合を
-  // 考慮し、try-catchでラップ。
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { useInterviewEngine } = require("@/hooks/useInterviewEngine");
-    return useInterviewEngine(sessionId);
-  } catch {
-    // フォールバック: モック版を使用
-    // eslint-disable-next-line react-hooks/rules-of-hooks
-    return useInterviewEngineMock(sessionId);
-  }
-}
-
-// =================================================================
-// インタビュー画面コンポーネント
+// メインページコンポーネント
 // =================================================================
 const TOTAL_INTERVIEW_TIME_MS = 300_000; // 5分
 
 export default function InterviewPage() {
   const params = useParams();
-  const router = useRouter();
   const token = params.token as string;
 
-  // tokenをsessionIdとして扱う（実際のフローでは token -> sessionId の解決が必要）
-  const { state, startInterview, endInterview } =
-    useInterviewEngineMock(token);
+  const [pageStatus, setPageStatus] = useState<PageStatus>("loading");
+  const [tokenInfo, setTokenInfo] = useState<TokenInfo | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string>("");
+
+  // トークンからセッション情報を取得
+  useEffect(() => {
+    async function resolveToken() {
+      try {
+        const res = await fetch(`/api/interviews/token/${token}`);
+
+        if (res.status === 410) {
+          const data = await res.json();
+          if (data.sessionStatus === "COMPLETED") {
+            setPageStatus("completed");
+          } else {
+            setPageStatus("expired");
+          }
+          setErrorMessage(data.error);
+          return;
+        }
+
+        if (!res.ok) {
+          const data = await res.json();
+          setErrorMessage(data.error || "セッション情報の取得に失敗しました");
+          setPageStatus("error");
+          return;
+        }
+
+        const data: TokenInfo = await res.json();
+        setTokenInfo(data);
+        setPageStatus("ready");
+      } catch {
+        setErrorMessage("ネットワークエラーが発生しました");
+        setPageStatus("error");
+      }
+    }
+
+    resolveToken();
+  }, [token]);
+
+  // ローディング画面
+  if (pageStatus === "loading") {
+    return (
+      <div className="flex h-screen w-full flex-col items-center justify-center bg-gradient-to-br from-[#0a0a1a] via-[#1A1A2E] to-[#16213E]">
+        <AIAvatar state="idle" />
+        <div className="mt-6 flex items-center gap-3 text-white/60">
+          <span className="h-5 w-5 animate-spin rounded-full border-2 border-white/40 border-t-transparent" />
+          <span className="text-sm">読み込み中...</span>
+        </div>
+      </div>
+    );
+  }
+
+  // 完了済み画面
+  if (pageStatus === "completed") {
+    return (
+      <div className="flex h-screen w-full flex-col items-center justify-center gap-6 bg-gradient-to-br from-[#0a0a1a] via-[#1A1A2E] to-[#16213E] px-6">
+        <div className="flex h-20 w-20 items-center justify-center rounded-full bg-green-500/20">
+          <svg
+            className="h-10 w-10 text-green-400"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M5 13l4 4L19 7"
+            />
+          </svg>
+        </div>
+        <div className="text-center">
+          <h2 className="mb-2 text-2xl font-bold text-white">
+            インタビュー完了済み
+          </h2>
+          <p className="text-sm text-white/60">
+            このインタビューは既に完了しています。ご協力ありがとうございました。
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // エラー / 無効な状態
+  if (pageStatus === "error" || pageStatus === "expired") {
+    return (
+      <div className="flex h-screen w-full flex-col items-center justify-center gap-6 bg-gradient-to-br from-[#0a0a1a] via-[#1A1A2E] to-[#16213E] px-6">
+        <div className="flex h-20 w-20 items-center justify-center rounded-full bg-red-500/20">
+          <AlertCircle className="h-10 w-10 text-red-400" />
+        </div>
+        <div className="text-center">
+          <h2 className="mb-2 text-xl font-bold text-white">
+            {pageStatus === "expired" ? "リンクが無効です" : "エラーが発生しました"}
+          </h2>
+          <p className="text-sm text-white/60">
+            {errorMessage || "予期しないエラーが発生しました"}
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // インタビュー準備完了
+  return <InterviewRoom tokenInfo={tokenInfo!} />;
+}
+
+// =================================================================
+// インタビュールームコンポーネント（実際のAIインタビュー）
+// =================================================================
+function InterviewRoom({ tokenInfo }: { tokenInfo: TokenInfo }) {
+  const { state, startInterview, endInterview } = useInterviewEngine(
+    tokenInfo.sessionId
+  );
 
   const [showTranscript, setShowTranscript] = useState(false);
   const [micPermissionDenied, setMicPermissionDenied] = useState(false);
 
-  // 完了時にリダイレクト
-  useEffect(() => {
-    if (state.phase === "completed") {
-      const timer = setTimeout(() => {
-        router.push("/dashboard");
-      }, 3000);
-      return () => clearTimeout(timer);
-    }
-  }, [state.phase, router]);
-
-  const handleStart = async () => {
-    // マイク許可リクエスト
+  const handleStart = useCallback(async () => {
     try {
       await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch {
       setMicPermissionDenied(true);
+      return;
     }
     startInterview();
-  };
+  }, [startInterview]);
 
   // アバターの状態判定
   const avatarState: "idle" | "speaking" | "listening" = state.isAISpeaking
@@ -238,16 +215,24 @@ export default function InterviewPage() {
         <div className="relative z-10 flex flex-1 flex-col items-center justify-center gap-8 px-6">
           <AIAvatar state="idle" />
           <div className="text-center">
-            <h1 className="mb-2 text-2xl font-bold text-white">
+            <h1 className="mb-1 text-2xl font-bold text-white">
               AIインタビュー
             </h1>
+            <p className="mb-1 text-sm font-medium text-purple-300">
+              {tokenInfo.project.title}
+            </p>
+            {tokenInfo.respondent.name && (
+              <p className="mb-6 text-xs text-white/50">
+                {tokenInfo.respondent.name}さん
+              </p>
+            )}
             <p className="mb-8 max-w-md text-sm text-white/60">
               マイクを使って、AIインタビュアーと会話します。
               約5分間のインタビューです。準備ができたら「開始」ボタンを押してください。
             </p>
             {micPermissionDenied && (
               <p className="mb-4 text-sm text-amber-400">
-                マイクの許可が得られませんでした。設定から許可してください。
+                マイクの許可が必要です。ブラウザの設定からマイクを許可してください。
               </p>
             )}
             <Button
@@ -355,9 +340,9 @@ export default function InterviewPage() {
               <div className="relative w-80 shrink-0 border-l border-white/10 px-4 lg:w-96">
                 <Button
                   variant="ghost"
-                  size="icon-xs"
+                  size="sm"
                   onClick={() => setShowTranscript(false)}
-                  className="absolute right-4 top-0 text-white/40 hover:text-white hover:bg-white/10"
+                  className="absolute right-4 top-0 h-7 w-7 p-0 text-white/40 hover:text-white hover:bg-white/10"
                 >
                   <X className="h-4 w-4" />
                 </Button>
@@ -393,7 +378,7 @@ export default function InterviewPage() {
                   ? "AIが話しています..."
                   : state.phase === "processing"
                     ? "処理中..."
-                    : "AIの応答を待っています"}
+                    : "マイクに向かってお話しください"}
             </p>
           </div>
         </div>
@@ -422,10 +407,10 @@ export default function InterviewPage() {
               インタビュー完了
             </h2>
             <p className="mb-2 text-sm text-white/60">
-              ご協力ありがとうございました。回答は安全に記録されました。
+              ご協力ありがとうございました。
             </p>
-            <p className="text-xs text-white/40">
-              自動的にリダイレクトします...
+            <p className="text-sm text-white/60">
+              回答は安全に記録されました。このページを閉じていただいて大丈夫です。
             </p>
           </div>
         </div>
@@ -435,7 +420,7 @@ export default function InterviewPage() {
       {state.phase === "error" && (
         <div className="relative z-10 flex flex-1 flex-col items-center justify-center gap-6 px-6">
           <div className="flex h-20 w-20 items-center justify-center rounded-full bg-red-500/20">
-            <X className="h-10 w-10 text-red-400" />
+            <AlertCircle className="h-10 w-10 text-red-400" />
           </div>
           <div className="text-center">
             <h2 className="mb-2 text-xl font-bold text-white">

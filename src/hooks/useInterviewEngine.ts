@@ -354,7 +354,7 @@ export function useInterviewEngine(
 
       const data = await response.json();
       const firstMessage: string =
-        data.firstMessage || "こんにちは。インタビューを始めましょう。";
+        data.message || "こんにちは。インタビューを始めましょう。";
 
       // フェーズをinterviewingに変更
       setPhase("interviewing");
