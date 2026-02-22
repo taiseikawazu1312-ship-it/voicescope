@@ -8,8 +8,11 @@ import {
   ArrowRight,
   Check,
   GripVertical,
+  Loader2,
   Mic,
   Plus,
+  RefreshCw,
+  Sparkles,
   Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -42,15 +45,15 @@ export default function NewProjectPage() {
   const router = useRouter();
   const [currentStep, setCurrentStep] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [questionsGenerated, setQuestionsGenerated] = useState(false);
 
   // Step 1: テーマ設定
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
 
   // Step 2: 質問設定
-  const [questions, setQuestions] = useState<QuestionItem[]>([
-    { id: crypto.randomUUID(), text: "", followUpPrompt: "" },
-  ]);
+  const [questions, setQuestions] = useState<QuestionItem[]>([]);
 
   const addQuestion = useCallback(() => {
     setQuestions((prev) => [
@@ -81,6 +84,50 @@ export default function NewProjectPage() {
       return next;
     });
   }, []);
+
+  const generateQuestions = useCallback(async () => {
+    setIsGenerating(true);
+    try {
+      const res = await fetch("/api/projects/generate-questions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: title.trim(),
+          description: description.trim() || undefined,
+        }),
+      });
+
+      if (!res.ok) throw new Error("生成に失敗しました");
+
+      const data = await res.json();
+      const generated = (data.questions as { text: string; followUpPrompt: string }[]).map(
+        (q) => ({
+          id: crypto.randomUUID(),
+          text: q.text,
+          followUpPrompt: q.followUpPrompt || "",
+        })
+      );
+      setQuestions(generated);
+      setQuestionsGenerated(true);
+    } catch {
+      // 生成失敗時は空の質問1つをセット
+      setQuestions([{ id: crypto.randomUUID(), text: "", followUpPrompt: "" }]);
+    } finally {
+      setIsGenerating(false);
+    }
+  }, [title, description]);
+
+  const handleNextStep = useCallback(async () => {
+    if (currentStep === 0) {
+      // Step 1→2: 質問を自動生成してから遷移
+      if (!questionsGenerated) {
+        await generateQuestions();
+      }
+      setCurrentStep(1);
+    } else {
+      setCurrentStep((s) => s + 1);
+    }
+  }, [currentStep, questionsGenerated, generateQuestions]);
 
   const canProceed = () => {
     if (currentStep === 0) return title.trim().length > 0;
@@ -223,13 +270,43 @@ export default function NewProjectPage() {
         )}
 
         {/* Step 2: 質問設定 */}
-        {currentStep === 1 && (
+        {currentStep === 1 && isGenerating && (
+          <Card>
+            <CardContent className="flex flex-col items-center justify-center py-16">
+              <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-br from-[#1A1A2E] to-[#4A3AFF]">
+                <Sparkles className="h-8 w-8 animate-pulse text-white" />
+              </div>
+              <h3 className="mb-2 text-lg font-semibold text-[#1A1A2E]">
+                質問を自動生成中...
+              </h3>
+              <p className="text-sm text-muted-foreground">
+                「{title}」に最適なインタビュー質問をAIが作成しています
+              </p>
+              <Loader2 className="mt-4 h-6 w-6 animate-spin text-[#4A3AFF]" />
+            </CardContent>
+          </Card>
+        )}
+        {currentStep === 1 && !isGenerating && (
           <Card>
             <CardHeader>
-              <CardTitle>質問設定</CardTitle>
-              <CardDescription>
-                AIがインタビューで聞く質問を設定してください。深掘り指示を追加すると、AIがより具体的なフォローアップを行います。
-              </CardDescription>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle>質問設定</CardTitle>
+                  <CardDescription>
+                    AIが自動生成した質問を確認・編集してください。深掘り指示でAIのフォローアップをカスタマイズできます。
+                  </CardDescription>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={generateQuestions}
+                  disabled={isGenerating}
+                  className="shrink-0"
+                >
+                  <RefreshCw className="h-4 w-4" />
+                  AI再生成
+                </Button>
+              </div>
             </CardHeader>
             <CardContent className="space-y-4">
               {questions.map((q, idx) => (
@@ -305,6 +382,7 @@ export default function NewProjectPage() {
           </Card>
         )}
 
+
         {/* Step 3: 確認 */}
         {currentStep === 2 && (
           <Card>
@@ -365,7 +443,10 @@ export default function NewProjectPage() {
         <div className="mt-6 flex items-center justify-between">
           <Button
             variant="outline"
-            onClick={() => setCurrentStep((s) => Math.max(0, s - 1))}
+            onClick={() => {
+              if (currentStep === 1) setQuestionsGenerated(false);
+              setCurrentStep((s) => Math.max(0, s - 1));
+            }}
             disabled={currentStep === 0}
           >
             <ArrowLeft className="h-4 w-4" />
@@ -374,12 +455,30 @@ export default function NewProjectPage() {
 
           {currentStep < STEPS.length - 1 ? (
             <Button
-              onClick={() => setCurrentStep((s) => s + 1)}
-              disabled={!canProceed()}
+              onClick={handleNextStep}
+              disabled={!canProceed() || isGenerating}
               className="bg-gradient-to-r from-[#1A1A2E] to-[#4A3AFF] text-white"
             >
-              次へ
-              <ArrowRight className="h-4 w-4" />
+              {isGenerating ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  生成中...
+                </>
+              ) : (
+                <>
+                  {currentStep === 0 ? (
+                    <>
+                      <Sparkles className="h-4 w-4" />
+                      AIで質問を生成して次へ
+                    </>
+                  ) : (
+                    <>
+                      次へ
+                      <ArrowRight className="h-4 w-4" />
+                    </>
+                  )}
+                </>
+              )}
             </Button>
           ) : (
             <Button
